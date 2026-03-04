@@ -1,0 +1,82 @@
+import os
+import fnmatch
+
+def load_gitignore_patterns(folder):
+    gitignore_path = os.path.join(folder, ".gitignore")
+    patterns = []
+
+    if os.path.isfile(gitignore_path):
+        with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    patterns.append(line)
+
+    return patterns
+
+def matches_gitignore(path, patterns, base_folder):
+    rel_path = os.path.relpath(path, base_folder).replace("\\", "/")
+
+    for pattern in patterns:
+        # Directory ignore
+        if pattern.endswith("/"):
+            if rel_path.startswith(pattern.rstrip("/")):
+                return True
+        # File pattern ignore
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+
+    return False
+
+def is_binary_file(filepath):
+    try:
+        with open(filepath, 'rb') as f:
+            chunk = f.read(1024)
+            if b'\0' in chunk:
+                return True
+    except:
+        return True
+    return False
+
+def count_lines(filepath):
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            return sum(1 for _ in f)
+    except:
+        return 0
+
+def main():
+    root_folder = input("Enter folder path: ").strip()
+
+    if not os.path.isdir(root_folder):
+        print("Invalid folder path.")
+        return
+
+    total_lines = 0
+
+    for current_root, dirs, files in os.walk(root_folder):
+        patterns = load_gitignore_patterns(current_root)
+
+        # Filter ignored directories
+        dirs[:] = [
+            d for d in dirs
+            if not matches_gitignore(os.path.join(current_root, d), patterns, current_root)
+        ]
+
+        for file in files:
+            filepath = os.path.join(current_root, file)
+
+            if matches_gitignore(filepath, patterns, current_root):
+                continue
+
+            if is_binary_file(filepath):
+                continue
+
+            lines = count_lines(filepath)
+            total_lines += lines
+
+    print("\n======================")
+    print(f"TOTAL LINES: {total_lines}")
+
+if __name__ == "__main__":
+    main()
