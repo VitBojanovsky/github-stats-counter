@@ -11,7 +11,6 @@ def get_all_repos(username, token=None):
     if token:
         auth = (username, token)
 
-    # Loop through all pages
     while url:
         response = requests.get(url, headers=headers, auth=auth)
         if response.status_code != 200:
@@ -19,7 +18,6 @@ def get_all_repos(username, token=None):
 
         repos.extend(response.json())
 
-        # Link header for pagination
         links = response.links
         url = links.get('next', {}).get('url') if links else None
 
