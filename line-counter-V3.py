@@ -1,5 +1,7 @@
 import os
 import fnmatch
+import subprocess
+import unicodedata
 from collections import defaultdict
 
 EXTENSION_MAP = {
@@ -59,6 +61,48 @@ def matches_gitignore(path, patterns, base_folder):
 
     return False
 
+def get_git_root(folder):
+    try:
+        result = subprocess.run(
+            ["git", "-C", folder, "rev-parse", "--show-toplevel"],
+            capture_output=True, encoding="utf-8", errors="ignore"
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except FileNotFoundError:
+        pass
+    return None
+
+def normalize_name(name):
+    nfkd = unicodedata.normalize("NFKD", name)
+    without_diacritics = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return without_diacritics.lower().strip()
+
+def blame_authors(filepath, git_root):
+    rel_path = os.path.relpath(filepath, git_root).replace("\\", "/")
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", git_root, "blame", "--line-porcelain", "--", rel_path],
+            capture_output=True, encoding="utf-8", errors="ignore"
+        )
+    except FileNotFoundError:
+        return {}
+
+    if result.returncode != 0:
+        return {}
+
+    authors = defaultdict(lambda: {"count": 0, "names": defaultdict(int)})
+
+    for line in result.stdout.splitlines():
+        if line.startswith("author "):
+            name = line[len("author "):]
+            key = normalize_name(name)
+            authors[key]["count"] += 1
+            authors[key]["names"][name] += 1
+
+    return authors
+
 def is_binary_file(filepath):
     try:
         with open(filepath, 'rb') as f:
@@ -81,7 +125,7 @@ def analyze_file(filepath, language):
                 stripped = line.strip()
 
                 if not stripped:
-                    continue  
+                    continue
 
                 if marker and stripped.startswith(marker):
                     comment_lines += 1
@@ -101,6 +145,11 @@ def main():
         return
 
     totals = defaultdict(lambda: {"code": 0, "comments": 0})
+    author_totals = defaultdict(lambda: {"count": 0, "names": defaultdict(int)})
+
+    git_root = get_git_root(root_folder)
+    if not git_root:
+        print("(Not a git repository or git not found - skipping blame breakdown)\n")
 
     for current_root, dirs, files in os.walk(root_folder):
         patterns = load_gitignore_patterns(current_root)
@@ -129,6 +178,12 @@ def main():
             totals[language]["code"] += code
             totals[language]["comments"] += comments
 
+            if git_root:
+                for key, data in blame_authors(filepath, git_root).items():
+                    author_totals[key]["count"] += data["count"]
+                    for name, count in data["names"].items():
+                        author_totals[key]["names"][name] += count
+
     grand_total_code = sum(v["code"] for v in totals.values())
 
     print("\n========== Breakdown ==========\n")
@@ -143,6 +198,17 @@ def main():
     print("========== TOTAL ==========")
     print(f"Total Code Lines: {grand_total_code}")
     print(f"Total Comment Lines: {sum(v['comments'] for v in totals.values())}")
+
+    if git_root:
+        grand_total_lines = sum(data["count"] for data in author_totals.values())
+
+        print("\n========== Git Blame (lines per author) ==========\n")
+
+        for _, data in sorted(author_totals.items(), key=lambda x: x[1]["count"], reverse=True):
+            lines = data["count"]
+            percent = (lines / grand_total_lines * 100) if grand_total_lines else 0
+            display_name = max(data["names"].items(), key=lambda x: x[1])[0]
+            print(f"{display_name}: {lines} lines ({percent:.1f}%)")
 
 if __name__ == "__main__":
     main()
